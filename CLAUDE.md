@@ -11,7 +11,9 @@ Please:
 
 ## Project Overview
 
-Eva is a personal AI assistant built for enterprise scale. It's a monorepo containing multiple microservices with a React frontend.
+Eva is a vendor agnostic personal AI assistant built for enterprise scale. 
+Eva is OS - Orchestrator System, having capabilities of goddess, connecting various services and components, presenting and consuming predefined set of APIs over MCP.
+It is a monorepo, containing multiple microservices with a React frontend.
 
 ## Architecture
 
