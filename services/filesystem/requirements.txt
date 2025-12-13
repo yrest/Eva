@@ -4,8 +4,8 @@ uvicorn[standard]==0.27.0
 pydantic==2.5.3
 pydantic-settings==2.1.0
 
-# MCP SDK
-mcp==0.9.0
+# MCP SDK (optional - for future MCP protocol integration)
+# mcp>=1.0.0
 
 # Security
 python-jose[cryptography]==3.3.0
@@ -21,7 +21,10 @@ watchfiles==0.21.0
 
 # Hashing and utilities
 blake3==0.4.1
-python-magic==0.4.27
+
+# MIME type detection (cross-platform)
+python-magic==0.4.27; sys_platform != 'win32'
+python-magic-bin==0.4.14; sys_platform == 'win32'
 
 # Testing
 pytest==7.4.4
