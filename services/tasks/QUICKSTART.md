@@ -102,6 +102,34 @@ uvicorn src.main_simple:app --reload --port 8008
 ./eva-register.py list
 ```
 
+### Register Collection Schemas
+
+Tell Eva about your vector collections so it knows what fields exist:
+
+```bash
+# Register email collection
+./eva-register.py add-collection abc \
+  '{"sender":"str", "subject":"str", "body":"str", "date":"datetime"}' \
+  --description "Daily email archive"
+
+# Register Teams messages
+./eva-register.py add-collection teams_messages \
+  '{"sender":"str", "channel":"str", "message":"str", "date":"datetime", "reactions":"int"}' \
+  --description "Teams chat history"
+
+# List registered collections
+./eva-register.py list-collections
+
+# Remove a collection schema
+./eva-register.py remove-collection abc
+```
+
+**Why register schemas?** Eva uses this to:
+- Know what fields are available for filtering
+- Understand the structure of your data
+- Generate better queries
+- Format results appropriately
+
 ## Create Tasks
 
 ### Via API
