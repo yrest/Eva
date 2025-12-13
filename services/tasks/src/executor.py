@@ -53,8 +53,11 @@ class TaskExecutor:
             servers = storage.list_servers(enabled_only=True)
             servers_by_id = {s["id"]: s for s in servers}
 
-            # Build system prompt
-            system_prompt = build_system_prompt(servers)
+            # Get collection schemas
+            collection_schemas = storage.list_collection_schemas()
+
+            # Build system prompt with context
+            system_prompt = build_system_prompt(servers, collection_schemas)
 
             # Initialize conversation
             if not task["conversation"]:
@@ -270,6 +273,8 @@ class TaskExecutor:
             "upsert_vectors": "/mcp/tools/upsert_vectors",
             "delete_vectors": "/mcp/tools/delete_vectors",
             "create_collection": "/mcp/tools/create_collection",
+            "list_collections": "/mcp/tools/list_collections",
+            "get_collection_info": "/mcp/tools/get_collection_info",
         }
 
         if tool_name not in endpoint_map:

@@ -129,6 +129,64 @@ def show_server(args):
     print()
 
 
+# Collection schema management
+
+def add_collection(args):
+    """Register a collection schema."""
+    import json
+
+    try:
+        schema = json.loads(args.schema)
+    except json.JSONDecodeError:
+        print("\n❌ Invalid JSON schema\n")
+        sys.exit(1)
+
+    collection = storage.register_collection_schema(
+        collection_name=args.name,
+        schema=schema,
+        description=args.description
+    )
+
+    print(f"\n✅ Registered collection schema: {collection['name']}")
+    print(f"   Description: {collection.get('description', 'None')}")
+    print(f"   Fields: {len(schema)}")
+    for field, field_type in schema.items():
+        print(f"     - {field}: {field_type}")
+    print()
+
+
+def list_collections(args):
+    """List all registered collection schemas."""
+    collections = storage.list_collection_schemas()
+
+    if not collections:
+        print("\n📋 No collection schemas registered yet.\n")
+        return
+
+    print(f"\n📋 Registered Collections ({len(collections)}):\n")
+
+    for name, info in collections.items():
+        print(f"  📦 {name}")
+        print(f"     Description: {info.get('description', 'No description')}")
+        print(f"     Fields: {', '.join(info.get('schema', {}).keys())}")
+        print()
+
+
+def remove_collection(args):
+    """Remove a collection schema."""
+    if not args.yes:
+        confirm = input(f"Remove collection schema '{args.name}'? [y/N] ")
+        if confirm.lower() != 'y':
+            print("Cancelled.")
+            return
+
+    success = storage.remove_collection_schema(args.name)
+    if success:
+        print(f"\n✅ Removed collection schema: {args.name}\n")
+    else:
+        print(f"\n❌ Collection schema '{args.name}' not found\n")
+
+
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -153,6 +211,16 @@ Examples:
 
   # Remove a server
   %(prog)s remove "Office Desktop"
+
+  # Register collection schemas
+  %(prog)s add-collection abc '{"sender":"str", "subject":"str", "date":"datetime"}' --description "Email archive"
+  %(prog)s add-collection teams_messages '{"sender":"str", "channel":"str", "message":"str", "date":"datetime"}' --description "Teams chat history"
+
+  # List collections
+  %(prog)s list-collections
+
+  # Remove collection schema
+  %(prog)s remove-collection abc
         """
     )
 
@@ -194,6 +262,21 @@ Examples:
     disable_parser = subparsers.add_parser('disable', help='Disable a server')
     disable_parser.add_argument('server', help='Server ID or name')
     disable_parser.set_defaults(func=disable_server)
+
+    # Collection schema commands
+    collection_parser = subparsers.add_parser('add-collection', help='Register a collection schema')
+    collection_parser.add_argument('name', help='Collection name (e.g., "abc")')
+    collection_parser.add_argument('schema', help='JSON schema (e.g., \'{"sender":"str", "date":"datetime"}\')')
+    collection_parser.add_argument('--description', default='', help='Description of the collection')
+    collection_parser.set_defaults(func=add_collection)
+
+    list_coll_parser = subparsers.add_parser('list-collections', help='List registered collection schemas')
+    list_coll_parser.set_defaults(func=list_collections)
+
+    remove_coll_parser = subparsers.add_parser('remove-collection', help='Remove a collection schema')
+    remove_coll_parser.add_argument('name', help='Collection name')
+    remove_coll_parser.add_argument('-y', '--yes', action='store_true', help='Skip confirmation')
+    remove_coll_parser.set_defaults(func=remove_collection)
 
     args = parser.parse_args()
 
