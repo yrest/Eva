@@ -1,397 +1,381 @@
-"""Task executor with approval workflow."""
+"""Task execution engine - orchestrates LLM and tool execution."""
 
 import json
-import uuid
+import asyncio
+import httpx
+from typing import Dict, List, Any, Optional
 from datetime import datetime
-from typing import Any, Dict, List, Optional
 
-from sqlalchemy.orm import Session
-
-from .config import settings
-from .database import Approval, Execution, Task, ToolExecution
+from .storage import storage
+from .guardrails import (
+    TaskGuardrails,
+    get_tool_definitions,
+    get_tools_for_openai
+)
+from .prompts import build_system_prompt
 from .llm_router import LLMRouter
-from .queue import TaskContextCache, TaskQueue
-from .tools import SafetyLevel, tool_registry
+from .config import settings
+
+
+class ToolExecutionError(Exception):
+    """Error during tool execution."""
+    pass
 
 
 class TaskExecutor:
-    """Execute tasks with LLM and tool calls."""
+    """Orchestrates task execution with LLM and tool calls."""
 
     def __init__(self):
-        """Initialize task executor."""
-        self.queue = TaskQueue()
-        self.context_cache = TaskContextCache()
+        """Initialize executor."""
+        self.llm = LLMRouter()
+        self.guardrails = TaskGuardrails()
 
-    async def execute_task(self, task: Task, db: Session) -> bool:
+    async def execute_task(self, task_id: str) -> Dict:
         """
-        Execute a task.
+        Execute a task from start to completion.
 
         Args:
-            task: Task to execute
-            db: Database session
+            task_id: Task ID to execute
 
         Returns:
-            True if execution completed successfully
+            Task result dict
         """
+        task = storage.get_task(task_id)
+        if not task:
+            raise ValueError(f"Task {task_id} not found")
+
+        # Update status to running
+        storage.update_task(task_id, {"status": "running"})
+        storage.log_event(task_id, "execution_started", {})
+
         try:
-            # Update task status
-            task.status = "running"
-            db.commit()
+            # Get registered servers
+            servers = storage.list_servers(enabled_only=True)
+            servers_by_id = {s["id"]: s for s in servers}
 
-            # Create execution record
-            execution = Execution(
-                task_id=task.id,
-                llm_backend=settings.default_llm_backend,
-                llm_model="",  # Will be set by router
-                conversation=[],
-                tool_calls=[],
-                status="running",
-            )
-            db.add(execution)
-            db.commit()
+            # Build system prompt
+            system_prompt = build_system_prompt(servers)
 
-            # Initialize LLM router
-            llm_router = LLMRouter()
-            execution.llm_model = llm_router.model
-            db.commit()
+            # Initialize conversation
+            if not task["conversation"]:
+                task["conversation"] = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": task["user_input"]}
+                ]
+                storage.update_task(task_id, {"conversation": task["conversation"]})
 
-            # Build initial conversation
-            messages = self._build_initial_messages(task)
-            execution.conversation = messages
-            db.commit()
-
-            # Get available tools
-            tools = tool_registry.get_openai_tools()
+            # Get tool definitions
+            tool_defs = get_tool_definitions()
+            openai_tools = get_tools_for_openai(servers_by_id)
 
             # Main execution loop
-            max_iterations = 10
+            max_iterations = 50  # Prevent infinite loops
             iteration = 0
 
             while iteration < max_iterations:
                 iteration += 1
+                storage.log_event(task_id, "llm_iteration", {"iteration": iteration})
 
-                # Call LLM
-                response = await llm_router.chat_completion(
-                    messages=messages,
-                    tools=tools,
+                # Get LLM response
+                llm_response = await self.llm.chat_completion(
+                    messages=task["conversation"],
+                    tools=openai_tools,
+                    backend=settings.default_llm_backend
                 )
 
-                # Add response to conversation
-                messages.append(response)
-                execution.conversation = messages
-                db.commit()
+                storage.log_event(task_id, "llm_response", {
+                    "has_tool_calls": bool(llm_response.get("tool_calls")),
+                    "content_length": len(llm_response.get("content", ""))
+                })
 
-                # Check if LLM wants to call tools
-                if not response.get("tool_calls"):
-                    # No tool calls, execution complete
-                    break
+                # Add assistant response to conversation
+                task["conversation"].append({
+                    "role": "assistant",
+                    "content": llm_response.get("content") or "",
+                    "tool_calls": llm_response.get("tool_calls")
+                })
+                storage.update_task(task_id, {"conversation": task["conversation"]})
 
-                # Process tool calls
-                tool_results = await self._process_tool_calls(
-                    response["tool_calls"],
-                    execution,
-                    db,
+                # Validate response with guardrails
+                is_valid, error_msg, response_type = self.guardrails.validate_response(
+                    llm_response,
+                    tool_defs,
+                    servers_by_id
                 )
 
-                # Add tool results to conversation
-                for result in tool_results:
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": result["tool_call_id"],
-                        "content": json.dumps(result["result"]),
+                # Handle different response types
+                if response_type == "clarification":
+                    # LLM needs clarification - suspend task
+                    storage.update_task(task_id, {
+                        "status": "suspended",
+                        "result": error_msg
                     })
+                    storage.log_event(task_id, "task_suspended", {
+                        "reason": "clarification_needed"
+                    })
+                    return {"status": "suspended", "message": error_msg}
 
-                execution.conversation = messages
-                db.commit()
+                elif response_type == "error":
+                    # Validation error - tell LLM
+                    task["conversation"].append({
+                        "role": "user",
+                        "content": f"Error: {error_msg}. Please try again."
+                    })
+                    storage.update_task(task_id, {"conversation": task["conversation"]})
+                    continue
 
-            # Mark execution as completed
-            execution.status = "completed"
-            execution.completed_at = datetime.utcnow()
-            db.commit()
+                elif response_type == "message":
+                    # No tool calls - task complete
+                    result = llm_response.get("content", "")
+                    storage.update_task(task_id, {
+                        "status": "completed",
+                        "result": result
+                    })
+                    storage.log_event(task_id, "task_completed", {})
+                    return {"status": "completed", "result": result}
 
-            # Update task status
-            task.status = "completed"
-            task.updated_at = datetime.utcnow()
-            db.commit()
+                elif response_type == "tool_calls":
+                    # Execute tool calls
+                    tool_calls = llm_response.get("tool_calls", [])
 
-            # Remove from queue
-            self.queue.mark_completed(str(task.id))
+                    for tool_call in tool_calls:
+                        tool_name = tool_call["function"]["name"]
+                        tool_args = json.loads(tool_call["function"]["arguments"])
 
-            return True
+                        # Check if approval needed
+                        if self.guardrails.requires_approval(tool_name, tool_defs):
+                            # Create approval request
+                            safety_level = self.guardrails.check_safety_level(tool_name, tool_defs)
 
-        except Exception as e:
-            # Mark execution as failed
-            if execution:
-                execution.status = "failed"
-                execution.error_message = str(e)
-                execution.completed_at = datetime.utcnow()
-                db.commit()
+                            approval = storage.create_approval(
+                                task_id=task_id,
+                                tool_name=tool_name,
+                                tool_params=tool_args,
+                                safety_level=safety_level,
+                                reason=f"Tool '{tool_name}' requires approval (level: {safety_level})"
+                            )
 
-            # Update task status
-            task.status = "failed"
-            task.updated_at = datetime.utcnow()
-            db.commit()
+                            storage.update_task(task_id, {"status": "waiting_approval"})
+                            storage.log_event(task_id, "approval_requested", {
+                                "approval_id": approval["id"],
+                                "tool_name": tool_name
+                            })
 
-            # Remove from queue
-            self.queue.mark_completed(str(task.id))
+                            return {
+                                "status": "waiting_approval",
+                                "approval_id": approval["id"],
+                                "tool_name": tool_name
+                            }
 
-            return False
+                        # Execute tool (no approval needed)
+                        try:
+                            result = await self.execute_tool(
+                                tool_name=tool_name,
+                                tool_args=tool_args,
+                                servers=servers_by_id,
+                                task_id=task_id
+                            )
 
-    def _build_initial_messages(self, task: Task) -> List[Dict[str, str]]:
-        """Build initial conversation messages."""
-        # System message
-        system_message = {
-            "role": "system",
-            "content": (
-                "You are Eva, an AI assistant helping with task automation. "
-                "You have access to various tools to help complete tasks. "
-                "When you need to perform an action, use the appropriate tool. "
-                "Be concise and focused on the task at hand."
-            ),
-        }
+                            # Add tool result to conversation
+                            task["conversation"].append({
+                                "role": "tool",
+                                "tool_call_id": tool_call["id"],
+                                "name": tool_name,
+                                "content": json.dumps(result)
+                            })
+                            storage.update_task(task_id, {"conversation": task["conversation"]})
 
-        # User message with task details
-        user_message = {
-            "role": "user",
-            "content": self._format_task_prompt(task),
-        }
+                        except ToolExecutionError as e:
+                            # Tool failed - tell LLM
+                            task["conversation"].append({
+                                "role": "tool",
+                                "tool_call_id": tool_call["id"],
+                                "name": tool_name,
+                                "content": f"ERROR: {str(e)}"
+                            })
+                            storage.update_task(task_id, {"conversation": task["conversation"]})
 
-        return [system_message, user_message]
-
-    def _format_task_prompt(self, task: Task) -> str:
-        """Format task as a prompt for the LLM."""
-        prompt = f"Task Type: {task.type}\n\n"
-
-        # Add input data
-        prompt += "Task Details:\n"
-        for key, value in task.input_data.items():
-            prompt += f"- {key}: {value}\n"
-
-        # Add context if available
-        if task.context:
-            prompt += "\nAdditional Context:\n"
-            for key, value in task.context.items():
-                prompt += f"- {key}: {value}\n"
-
-        prompt += "\nPlease help me complete this task."
-
-        return prompt
-
-    async def _process_tool_calls(
-        self,
-        tool_calls: List[Dict[str, Any]],
-        execution: Execution,
-        db: Session,
-    ) -> List[Dict[str, Any]]:
-        """Process tool calls with approval workflow."""
-        results = []
-
-        for tool_call in tool_calls:
-            function_name = tool_call["function"]["name"]
-            function_args = json.loads(tool_call["function"]["arguments"])
-
-            # Get tool definition
-            tool_def = tool_registry.get_tool(function_name)
-
-            if not tool_def:
-                results.append({
-                    "tool_call_id": tool_call["id"],
-                    "result": {"error": f"Unknown tool: {function_name}"},
-                })
-                continue
-
-            # Check if approval is required
-            if tool_def.requires_approval:
-                # Create approval request
-                approval = Approval(
-                    execution_id=execution.id,
-                    tool_name=function_name,
-                    tool_params=function_args,
-                    safety_level=tool_def.safety_level,
-                    status="pending",
-                )
-                db.add(approval)
-                db.commit()
-
-                # Update execution status
-                execution.status = "waiting_approval"
-                db.commit()
-
-                # For now, return a message indicating approval is needed
-                # In a real system, this would pause execution
-                results.append({
-                    "tool_call_id": tool_call["id"],
-                    "result": {
-                        "status": "pending_approval",
-                        "approval_id": str(approval.id),
-                        "message": f"Approval required for {function_name}",
-                    },
-                })
-                continue
-
-            # Execute tool
-            result = await self._execute_tool(
-                function_name,
-                function_args,
-                tool_def.requires_sandbox,
-                execution,
-                db,
-            )
-
-            results.append({
-                "tool_call_id": tool_call["id"],
-                "result": result,
+            # Max iterations reached
+            storage.update_task(task_id, {
+                "status": "failed",
+                "error": f"Maximum iterations ({max_iterations}) reached"
+            })
+            storage.log_event(task_id, "task_failed", {
+                "reason": "max_iterations"
             })
 
-        return results
-
-    async def _execute_tool(
-        self,
-        tool_name: str,
-        tool_params: Dict[str, Any],
-        requires_sandbox: bool,
-        execution: Execution,
-        db: Session,
-        approval_id: Optional[uuid.UUID] = None,
-    ) -> Dict[str, Any]:
-        """Execute a tool."""
-        # Create tool execution record
-        tool_exec = ToolExecution(
-            execution_id=execution.id,
-            approval_id=approval_id,
-            tool_name=tool_name,
-            tool_params=tool_params,
-            sandbox_used=requires_sandbox,
-        )
-        db.add(tool_exec)
-        db.commit()
-
-        try:
-            # Get tool handler
-            handler = tool_registry.get_handler(tool_name)
-
-            if not handler:
-                raise ValueError(f"No handler for tool: {tool_name}")
-
-            # Execute tool
-            result = await handler(**tool_params)
-
-            # Update tool execution
-            tool_exec.result = result
-            tool_exec.completed_at = datetime.utcnow()
-            db.commit()
-
-            return result
+            return {
+                "status": "failed",
+                "error": "Task execution exceeded maximum iterations"
+            }
 
         except Exception as e:
-            # Update tool execution with error
-            tool_exec.error_message = str(e)
-            tool_exec.completed_at = datetime.utcnow()
-            db.commit()
+            # Unexpected error
+            storage.update_task(task_id, {
+                "status": "failed",
+                "error": str(e)
+            })
+            storage.log_event(task_id, "task_failed", {
+                "reason": "exception",
+                "error": str(e)
+            })
 
-            return {"error": str(e)}
+            return {"status": "failed", "error": str(e)}
 
-    async def approve_tool_call(
+    async def execute_tool(
         self,
-        approval_id: uuid.UUID,
-        reviewed_by: str,
-        comment: Optional[str],
-        db: Session,
-    ) -> bool:
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        servers: Dict[str, Dict],
+        task_id: str,
+        max_retries: int = 3
+    ) -> Dict:
         """
-        Approve a tool call and execute it.
+        Execute a tool call with retry logic.
 
         Args:
-            approval_id: Approval record ID
-            reviewed_by: Reviewer identifier
-            comment: Review comment
-            db: Database session
+            tool_name: Name of the tool
+            tool_args: Tool arguments
+            servers: Dict of registered servers
+            task_id: Task ID (for logging)
+            max_retries: Maximum retry attempts
 
         Returns:
-            True if approved and executed successfully
+            Tool execution result
+
+        Raises:
+            ToolExecutionError: If tool execution fails
         """
-        # Get approval
-        approval = db.query(Approval).filter(Approval.id == approval_id).first()
+        server_id = tool_args.pop("server_id", None)
 
-        if not approval or approval.status != "pending":
-            return False
+        if not server_id or server_id not in servers:
+            raise ToolExecutionError(f"Invalid or missing server_id: {server_id}")
 
-        # Update approval
-        approval.status = "approved"
-        approval.reviewed_at = datetime.utcnow()
-        approval.reviewed_by = reviewed_by
-        approval.review_comment = comment
-        db.commit()
+        server = servers[server_id]
 
-        # Get execution
-        execution = db.query(Execution).filter(Execution.id == approval.execution_id).first()
+        storage.log_event(task_id, "tool_call_started", {
+            "tool_name": tool_name,
+            "server": server["name"],
+            "server_id": server_id
+        })
 
-        if not execution:
-            return False
+        # Map tool name to MCP endpoint
+        endpoint_map = {
+            "list_directory": "/mcp/tools/list_directory",
+            "read_file": "/mcp/tools/read_file",
+            "search_files": "/mcp/tools/search_files",
+            "write_file": "/mcp/tools/write_file",
+            "embed_text": "/mcp/tools/embed_text",
+            "search_vectors": "/mcp/tools/search_vectors",
+            "upsert_vectors": "/mcp/tools/upsert_vectors",
+            "delete_vectors": "/mcp/tools/delete_vectors",
+            "create_collection": "/mcp/tools/create_collection",
+        }
 
-        # Get tool definition
-        tool_def = tool_registry.get_tool(approval.tool_name)
+        if tool_name not in endpoint_map:
+            raise ToolExecutionError(f"Unknown tool: {tool_name}")
 
-        if not tool_def:
-            return False
+        endpoint = endpoint_map[tool_name]
+        url = f"{server['url']}{endpoint}"
 
-        # Execute the tool
-        result = await self._execute_tool(
-            approval.tool_name,
-            approval.tool_params,
-            tool_def.requires_sandbox,
-            execution,
-            db,
-            approval_id=approval.id,
-        )
+        # Retry loop
+        for attempt in range(max_retries):
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(
+                        url,
+                        headers={"Authorization": f"Bearer {server['auth_token']}"},
+                        json=tool_args
+                    )
 
-        # Update execution status
-        execution.status = "running"
-        db.commit()
+                    response.raise_for_status()
+                    result = response.json()
 
-        # TODO: Resume execution with tool result
-        # This would require continuing the conversation
+                    storage.log_event(task_id, "tool_call_success", {
+                        "tool_name": tool_name,
+                        "server": server["name"],
+                        "attempt": attempt + 1
+                    })
 
-        return True
+                    return result
 
-    async def reject_tool_call(
-        self,
-        approval_id: uuid.UUID,
-        reviewed_by: str,
-        comment: Optional[str],
-        db: Session,
-    ) -> bool:
-        """Reject a tool call."""
-        # Get approval
-        approval = db.query(Approval).filter(Approval.id == approval_id).first()
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    # Final attempt failed
+                    storage.log_event(task_id, "tool_call_failed", {
+                        "tool_name": tool_name,
+                        "server": server["name"],
+                        "error": str(e),
+                        "attempts": max_retries
+                    })
 
-        if not approval or approval.status != "pending":
-            return False
+                    raise ToolExecutionError(
+                        f"Tool '{tool_name}' on server '{server['name']}' failed after {max_retries} attempts: {str(e)}"
+                    )
 
-        # Update approval
-        approval.status = "rejected"
-        approval.reviewed_at = datetime.utcnow()
-        approval.reviewed_by = reviewed_by
-        approval.review_comment = comment
-        db.commit()
+                # Retry with exponential backoff
+                await asyncio.sleep(2 ** attempt)
 
-        # Get execution
-        execution = db.query(Execution).filter(Execution.id == approval.execution_id).first()
+    async def resume_after_approval(self, task_id: str, approval_id: str) -> Dict:
+        """
+        Resume task execution after approval.
 
-        if not execution:
-            return False
+        Args:
+            task_id: Task ID
+            approval_id: Approval ID
 
-        # Mark execution as failed
-        execution.status = "failed"
-        execution.error_message = f"Tool call rejected: {comment or 'No comment'}"
-        execution.completed_at = datetime.utcnow()
-        db.commit()
+        Returns:
+            Task result dict
+        """
+        approval = storage.get_approval(approval_id)
+        if not approval:
+            raise ValueError(f"Approval {approval_id} not found")
 
-        # Update task status
-        task = db.query(Task).filter(Task.id == execution.task_id).first()
-        if task:
-            task.status = "failed"
-            task.updated_at = datetime.utcnow()
-            db.commit()
+        if approval["status"] == "rejected":
+            storage.update_task(task_id, {
+                "status": "failed",
+                "error": f"Tool '{approval['tool_name']}' was rejected by user"
+            })
+            return {"status": "failed", "error": "Tool execution rejected"}
 
-        return True
+        if approval["status"] != "approved":
+            raise ValueError(f"Approval {approval_id} is not in approved state")
+
+        # Get task and servers
+        task = storage.get_task(task_id)
+        servers = storage.list_servers(enabled_only=True)
+        servers_by_id = {s["id"]: s for s in servers}
+
+        # Execute the approved tool
+        try:
+            result = await self.execute_tool(
+                tool_name=approval["tool_name"],
+                tool_args=approval["tool_params"].copy(),
+                servers=servers_by_id,
+                task_id=task_id
+            )
+
+            # Add result to conversation
+            task["conversation"].append({
+                "role": "tool",
+                "name": approval["tool_name"],
+                "content": json.dumps(result)
+            })
+            storage.update_task(task_id, {
+                "conversation": task["conversation"],
+                "status": "running"
+            })
+
+            # Continue execution
+            return await self.execute_task(task_id)
+
+        except ToolExecutionError as e:
+            storage.update_task(task_id, {
+                "status": "failed",
+                "error": str(e)
+            })
+            return {"status": "failed", "error": str(e)}
+
+
+# Global executor instance
+executor = TaskExecutor()
