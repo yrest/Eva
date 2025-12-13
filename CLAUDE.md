@@ -29,6 +29,7 @@ eva/
 │   ├── api-gateway/      # Request routing (Node.js/Fastify)
 │   ├── auth/             # Authentication (Node.js/Fastify)
 │   ├── chat/             # AI chat handling (Python/FastAPI)
+│   ├── filesystem/       # Secure file access MCP server (Python/FastAPI)
 │   ├── knowledge/        # Document/RAG service (Go/Fiber)
 │   └── memory/           # Context management (Python/FastAPI)
 └── infrastructure/
@@ -56,6 +57,7 @@ pnpm --filter @eva/api-gateway dev
 # Python services
 cd services/chat && python -m src.main
 cd services/memory && python -m src.main
+cd services/filesystem && python -m src.main
 
 # Go service
 cd services/knowledge && go run cmd/main.go
@@ -74,6 +76,7 @@ docker compose up -d redis postgres  # Start infra only
 - Chat: 8002
 - Knowledge: 8003
 - Memory: 8004
+- Filesystem: 8005
 
 ## Package Dependencies
 - `@eva/shared` - Base package, no internal dependencies
