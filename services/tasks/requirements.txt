@@ -1,0 +1,42 @@
+# FastAPI and ASGI server
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+
+# Pydantic for data validation
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# Database
+sqlalchemy==2.0.25
+asyncpg==0.29.0
+alembic==1.13.1
+
+# Redis queue
+redis==5.0.1
+rq==1.16.0
+
+# HTTP client for LLM APIs
+httpx==0.26.0
+openai==1.12.0  # OpenAI-compatible client
+anthropic==0.18.1
+
+# Docker SDK for sandboxing
+docker==7.0.0
+
+# Utilities
+python-multipart==0.0.6
+python-dateutil==2.8.2
+pytz==2024.1
+
+# Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Logging and monitoring
+structlog==24.1.0
+
+# Testing (dev)
+pytest==7.4.4
+pytest-asyncio==0.23.3
+pytest-cov==4.1.0
+httpx-mock==0.0.1
