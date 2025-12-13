@@ -229,6 +229,20 @@ TOOL_DEFINITIONS = {
         "required_params": ["server_id", "collection"],
         "optional_params": ["point_ids", "filter_conditions"],
         "safety_level": "DANGEROUS"
+    },
+    "list_collections": {
+        "description": "List all available collections in the vector database",
+        "requires_server": True,
+        "required_params": ["server_id"],
+        "optional_params": [],
+        "safety_level": "READ_ONLY"
+    },
+    "get_collection_info": {
+        "description": "Get detailed information about a collection including schema and stats",
+        "requires_server": True,
+        "required_params": ["server_id", "name"],
+        "optional_params": [],
+        "safety_level": "READ_ONLY"
     }
 }
 

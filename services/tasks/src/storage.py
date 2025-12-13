@@ -23,6 +23,11 @@ class FileStorage:
         if not self.registry_file.exists():
             self.registry_file.write_text(json.dumps({"servers": []}, indent=2))
 
+        # Ensure collection schemas file exists
+        self.collections_file = self.base / "collection_schemas.json"
+        if not self.collections_file.exists():
+            self.collections_file.write_text(json.dumps({"collections": {}}, indent=2))
+
     # ===== MCP Server Registry =====
 
     def list_servers(self, enabled_only: bool = True, server_type: str = None) -> List[Dict]:
@@ -163,6 +168,69 @@ class FileStorage:
         self.registry_file.write_text(json.dumps(data, indent=2))
 
         self.log_event("system", "server_removed", {"server_id": server_id})
+        return True
+
+    # ===== Collection Schema Registry =====
+
+    def register_collection_schema(
+        self,
+        collection_name: str,
+        schema: Dict[str, str],
+        description: str = ""
+    ) -> Dict:
+        """
+        Register metadata schema for a collection.
+
+        Args:
+            collection_name: Name of the collection
+            schema: Field name -> field type mapping
+            description: Human-readable description
+
+        Returns:
+            Collection schema dict
+        """
+        data = json.loads(self.collections_file.read_text())
+
+        collection_info = {
+            "name": collection_name,
+            "schema": schema,
+            "description": description,
+            "registered_at": datetime.utcnow().isoformat()
+        }
+
+        data["collections"][collection_name] = collection_info
+        self.collections_file.write_text(json.dumps(data, indent=2))
+
+        self.log_event("system", "collection_registered", {
+            "collection_name": collection_name
+        })
+
+        return collection_info
+
+    def get_collection_schema(self, collection_name: str) -> Optional[Dict]:
+        """Get schema for a collection."""
+        data = json.loads(self.collections_file.read_text())
+        return data["collections"].get(collection_name)
+
+    def list_collection_schemas(self) -> Dict[str, Dict]:
+        """Get all registered collection schemas."""
+        data = json.loads(self.collections_file.read_text())
+        return data.get("collections", {})
+
+    def remove_collection_schema(self, collection_name: str) -> bool:
+        """Remove a collection schema."""
+        data = json.loads(self.collections_file.read_text())
+
+        if collection_name not in data["collections"]:
+            return False
+
+        del data["collections"][collection_name]
+        self.collections_file.write_text(json.dumps(data, indent=2))
+
+        self.log_event("system", "collection_schema_removed", {
+            "collection_name": collection_name
+        })
+
         return True
 
     # ===== Task Management =====
