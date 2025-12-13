@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: ../../infrastructure/docker/web.Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    depends_on:
+      - api-gateway
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/api-gateway.Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - AUTH_SERVICE_URL=http://auth:8001
+      - CHAT_SERVICE_URL=http://chat:8002
+      - KNOWLEDGE_SERVICE_URL=http://knowledge:8003
+      - MEMORY_SERVICE_URL=http://memory:8004
+    depends_on:
+      - auth
+      - chat
+      - knowledge
+      - memory
+
+  auth:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/auth.Dockerfile
+    ports:
+      - "8001:8001"
+    environment:
+      - PORT=8001
+      - JWT_SECRET=${JWT_SECRET}
+      - DATABASE_URL=${DATABASE_URL}
+
+  chat:
+    build:
+      context: ./services/chat
+      dockerfile: ../../infrastructure/docker/chat.Dockerfile
+    ports:
+      - "8002:8002"
+    environment:
+      - PORT=8002
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - MEMORY_SERVICE_URL=http://memory:8004
+
+  knowledge:
+    build:
+      context: ./services/knowledge
+      dockerfile: ../../infrastructure/docker/knowledge.Dockerfile
+    ports:
+      - "8003:8003"
+    environment:
+      - PORT=8003
+      - VECTOR_DB_URL=${VECTOR_DB_URL}
+
+  memory:
+    build:
+      context: ./services/memory
+      dockerfile: ../../infrastructure/docker/memory.Dockerfile
+    ports:
+      - "8004:8004"
+    environment:
+      - PORT=8004
+      - REDIS_URL=${REDIS_URL}
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-eva}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-eva}
+      - POSTGRES_DB=${POSTGRES_DB:-eva}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  redis_data:
+  postgres_data:
