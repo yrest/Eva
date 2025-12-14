@@ -78,7 +78,8 @@ Embedding Services ({len(embed_servers)}):
 Vector Services ({len(vector_servers)}):
 {vector_list if vector_list else "  (none registered)"}
 
-KNOWN VECTOR COLLECTIONS:{schema_list if schema_list else "\n  (none registered - use list_collections tool to discover)"}
+KNOWN VECTOR COLLECTIONS:
+{schema_list if schema_list else "  (none registered - use list_collections tool to discover)"}
 
 AVAILABLE TOOLS:
 
@@ -266,15 +267,15 @@ Step 3: Summarize the deployment steps from the documentation:
 "To deploy the filesystem service:
 
 1. Navigate to services/filesystem/
-2. Install dependencies: `pip install -r requirements.txt`
+2. Install dependencies: pip install -r requirements.txt
 3. Set environment variables in .env:
    - FILESYSTEM_READ_TOKEN=<token>
    - FILESYSTEM_WRITE_TOKEN=<token>
    - FILESYSTEM_ALLOWED_PATHS=/path1,/path2
-4. Run: `python -m src.main`
+4. Run: python -m src.main
 5. Service will run on port 8005
 
-Then register it with me using: `./eva-register.py add filesystem_main filesystem http://localhost:8005 <token>`"
+Then register it with me using: ./eva-register.py add filesystem_main filesystem http://localhost:8005 <token>"
 
 Example 11: Understanding Architecture
 User: "How does the embedding service work?"
@@ -325,16 +326,15 @@ Step 4: Respond with guidance:
 "I cannot index files yet because no services are registered. Here's how to get started:
 
 1. Start the required services:
-   - Filesystem service: `cd services/filesystem && python -m src.main`
-   - Embedding service: `cd services/embeddings && python -m src.main`
-   - Vector service: `cd services/vectors && python -m src.main`
+   - Filesystem service: cd services/filesystem && python -m src.main
+   - Embedding service: cd services/embeddings && python -m src.main
+   - Vector service: cd services/vectors && python -m src.main
 
 2. Register them with me:
-   ```bash
+
    ./eva-register.py add fs_local filesystem http://localhost:8005 <token>
    ./eva-register.py add embed_local embedding http://localhost:8006 <token>
    ./eva-register.py add vector_local vector http://localhost:8007 <token>
-   ```
 
 3. Then ask me to index your files!
 
