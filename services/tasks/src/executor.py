@@ -88,8 +88,7 @@ class TaskExecutor:
                 # Get LLM response
                 llm_response = await self.llm.chat_completion(
                     messages=task["conversation"],
-                    tools=openai_tools,
-                    backend=settings.default_llm_backend
+                    tools=openai_tools
                 )
 
                 storage.log_event(task_id, "llm_response", {
