@@ -3,6 +3,9 @@
 import json
 import asyncio
 import httpx
+import os
+import glob
+from pathlib import Path
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 
@@ -24,6 +27,9 @@ class ToolExecutionError(Exception):
 
 class TaskExecutor:
     """Orchestrates task execution with LLM and tool calls."""
+
+    # Eva's base directory
+    EVA_BASE_DIR = Path("/home/user/Eva")
 
     def __init__(self):
         """Initialize executor."""
@@ -172,12 +178,22 @@ class TaskExecutor:
 
                         # Execute tool (no approval needed)
                         try:
-                            result = await self.execute_tool(
-                                tool_name=tool_name,
-                                tool_args=tool_args,
-                                servers=servers_by_id,
-                                task_id=task_id
-                            )
+                            # Check if it's a local tool
+                            local_tools = ["search_eva_docs", "read_eva_file", "list_eva_files"]
+
+                            if tool_name in local_tools:
+                                result = await self.execute_local_tool(
+                                    tool_name=tool_name,
+                                    tool_args=tool_args,
+                                    task_id=task_id
+                                )
+                            else:
+                                result = await self.execute_tool(
+                                    tool_name=tool_name,
+                                    tool_args=tool_args,
+                                    servers=servers_by_id,
+                                    task_id=task_id
+                                )
 
                             # Add tool result to conversation
                             task["conversation"].append({
@@ -320,6 +336,165 @@ class TaskExecutor:
 
                 # Retry with exponential backoff
                 await asyncio.sleep(2 ** attempt)
+
+    async def execute_local_tool(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        task_id: str
+    ) -> Dict:
+        """
+        Execute a local tool (self-introspection tools).
+
+        Args:
+            tool_name: Name of the local tool
+            tool_args: Tool arguments
+            task_id: Task ID (for logging)
+
+        Returns:
+            Tool execution result
+
+        Raises:
+            ToolExecutionError: If tool execution fails
+        """
+        storage.log_event(task_id, "local_tool_call_started", {
+            "tool_name": tool_name
+        })
+
+        try:
+            if tool_name == "search_eva_docs":
+                return await self._search_eva_docs(tool_args)
+            elif tool_name == "read_eva_file":
+                return await self._read_eva_file(tool_args)
+            elif tool_name == "list_eva_files":
+                return await self._list_eva_files(tool_args)
+            else:
+                raise ToolExecutionError(f"Unknown local tool: {tool_name}")
+
+        except Exception as e:
+            storage.log_event(task_id, "local_tool_call_failed", {
+                "tool_name": tool_name,
+                "error": str(e)
+            })
+            raise ToolExecutionError(f"Local tool '{tool_name}' failed: {str(e)}")
+
+    async def _search_eva_docs(self, args: Dict[str, Any]) -> Dict:
+        """Search Eva's documentation files."""
+        query = args["query"].lower()
+        file_pattern = args.get("file_pattern", "**/*.md")
+
+        # Find all matching files
+        matching_files = list(self.EVA_BASE_DIR.glob(file_pattern))
+        results = []
+
+        for file_path in matching_files:
+            try:
+                content = file_path.read_text(encoding="utf-8")
+
+                # Simple grep-like search
+                matching_lines = []
+                for i, line in enumerate(content.split("\n"), 1):
+                    if query in line.lower():
+                        matching_lines.append({
+                            "line_number": i,
+                            "line": line.strip()
+                        })
+
+                if matching_lines:
+                    results.append({
+                        "file": str(file_path.relative_to(self.EVA_BASE_DIR)),
+                        "matches": matching_lines[:5]  # Limit to first 5 matches per file
+                    })
+
+            except Exception as e:
+                # Skip files that can't be read
+                continue
+
+        return {
+            "query": args["query"],
+            "results": results,
+            "total_files": len(results)
+        }
+
+    async def _read_eva_file(self, args: Dict[str, Any]) -> Dict:
+        """Read a specific file from Eva's codebase."""
+        file_path = args["path"]
+
+        # Security: ensure path is within Eva's directory
+        full_path = self.EVA_BASE_DIR / file_path
+
+        if not full_path.resolve().is_relative_to(self.EVA_BASE_DIR.resolve()):
+            raise ToolExecutionError("Path must be within Eva's codebase")
+
+        if not full_path.exists():
+            raise ToolExecutionError(f"File not found: {file_path}")
+
+        if not full_path.is_file():
+            raise ToolExecutionError(f"Not a file: {file_path}")
+
+        try:
+            content = full_path.read_text(encoding="utf-8")
+            return {
+                "file": file_path,
+                "content": content,
+                "size": len(content),
+                "lines": len(content.split("\n"))
+            }
+        except UnicodeDecodeError:
+            # Binary file
+            return {
+                "file": file_path,
+                "error": "Binary file - cannot display as text",
+                "size": full_path.stat().st_size
+            }
+
+    async def _list_eva_files(self, args: Dict[str, Any]) -> Dict:
+        """List files matching a pattern."""
+        pattern = args["pattern"]
+        base_path = args.get("base_path", "")
+
+        # Determine search root
+        if base_path:
+            search_root = self.EVA_BASE_DIR / base_path
+        else:
+            search_root = self.EVA_BASE_DIR
+
+        # Security: ensure base_path is within Eva's directory
+        if not search_root.resolve().is_relative_to(self.EVA_BASE_DIR.resolve()):
+            raise ToolExecutionError("base_path must be within Eva's codebase")
+
+        if not search_root.exists():
+            raise ToolExecutionError(f"Directory not found: {base_path}")
+
+        # Find matching files
+        try:
+            matching_files = list(search_root.glob(pattern))
+
+            files = []
+            for file_path in matching_files:
+                if file_path.is_file():
+                    try:
+                        stat = file_path.stat()
+                        files.append({
+                            "path": str(file_path.relative_to(self.EVA_BASE_DIR)),
+                            "size": stat.st_size,
+                            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                        })
+                    except Exception:
+                        continue
+
+            # Sort by modification time (most recent first)
+            files.sort(key=lambda x: x["modified"], reverse=True)
+
+            return {
+                "pattern": pattern,
+                "base_path": base_path or "/",
+                "files": files,
+                "total": len(files)
+            }
+
+        except Exception as e:
+            raise ToolExecutionError(f"Failed to list files: {str(e)}")
 
     async def resume_after_approval(self, task_id: str, approval_id: str) -> Dict:
         """

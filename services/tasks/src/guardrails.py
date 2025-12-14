@@ -243,6 +243,28 @@ TOOL_DEFINITIONS = {
         "required_params": ["server_id", "name"],
         "optional_params": [],
         "safety_level": "READ_ONLY"
+    },
+    # Local documentation tools (for self-introspection)
+    "search_eva_docs": {
+        "description": "Search Eva's documentation files (.md) for information. Use this to learn how to use services, understand architecture, or find setup instructions.",
+        "requires_server": False,
+        "required_params": ["query"],
+        "optional_params": ["file_pattern"],
+        "safety_level": "READ_ONLY"
+    },
+    "read_eva_file": {
+        "description": "Read a specific file from Eva's codebase. Useful for reading documentation, configuration, or source code.",
+        "requires_server": False,
+        "required_params": ["path"],
+        "optional_params": [],
+        "safety_level": "READ_ONLY"
+    },
+    "list_eva_files": {
+        "description": "List files in Eva's codebase matching a pattern. Use glob patterns like '**/*.md' for all markdown files.",
+        "requires_server": False,
+        "required_params": ["pattern"],
+        "optional_params": ["base_path"],
+        "safety_level": "READ_ONLY"
     }
 }
 
