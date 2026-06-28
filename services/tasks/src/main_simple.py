@@ -4,7 +4,7 @@ import asyncio
 from typing import List, Optional
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .auth import require_read_permission, require_write_permission, require_admin_permission
 from .config import settings
@@ -58,6 +58,15 @@ class ServerCreate(BaseModel):
     url: str
     auth_token: str
     capabilities: Optional[dict] = None
+
+
+class SkillCreate(BaseModel):
+    """Create skill registration."""
+    name: str
+    description: str
+    tool_names: List[str] = Field(default_factory=list)
+    senses: List[str] = Field(default_factory=list)
+    triggers: List[str] = Field(default_factory=list)
 
 
 # ============================================================================
@@ -332,6 +341,77 @@ async def update_server(
 
 
 # ============================================================================
+# Skills Registry
+# ============================================================================
+
+@app.post("/admin/skills")
+async def register_skill(
+    skill_data: SkillCreate,
+    credentials: HTTPAuthorizationCredentials = Depends(require_admin_permission)
+):
+    """Register a new skill."""
+    try:
+        skill = storage.add_skill(
+            name=skill_data.name,
+            description=skill_data.description,
+            tool_names=skill_data.tool_names,
+            senses=skill_data.senses,
+            triggers=skill_data.triggers,
+        )
+        return skill
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/admin/skills")
+async def list_skills(
+    enabled_only: bool = True,
+    credentials: HTTPAuthorizationCredentials = Depends(require_read_permission)
+):
+    """List registered skills."""
+    skills = storage.list_skills(enabled_only=enabled_only)
+    return {"skills": skills}
+
+
+@app.get("/admin/skills/{skill_id}")
+async def get_skill(
+    skill_id: str,
+    credentials: HTTPAuthorizationCredentials = Depends(require_read_permission)
+):
+    """Get skill by ID."""
+    skill = storage.get_skill(skill_id)
+    if not skill:
+        raise HTTPException(status_code=404, detail="Skill not found")
+    return skill
+
+
+@app.delete("/admin/skills/{skill_id}")
+async def remove_skill(
+    skill_id: str,
+    credentials: HTTPAuthorizationCredentials = Depends(require_admin_permission)
+):
+    """Remove a skill from registry."""
+    success = storage.remove_skill(skill_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Skill not found")
+    return {"status": "removed", "skill_id": skill_id}
+
+
+@app.patch("/admin/skills/{skill_id}")
+async def update_skill(
+    skill_id: str,
+    updates: dict,
+    credentials: HTTPAuthorizationCredentials = Depends(require_admin_permission)
+):
+    """Update skill properties."""
+    try:
+        skill = storage.update_skill(skill_id, updates)
+        return skill
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+# ============================================================================
 # Logs
 # ============================================================================
 
@@ -363,6 +443,11 @@ async def mcp_info():
             "multi_llm_support": True,
             "service_orchestration": True,
             "filesystem_storage": True
+        },
+        "registries": {
+            "mcp_servers": len(storage.list_servers(enabled_only=False)),
+            "skills": len(storage.list_skills(enabled_only=False)),
+            "collection_schemas": len(storage.list_collection_schemas())
         },
         "llm_backends": {
             "default": settings.default_llm_backend,

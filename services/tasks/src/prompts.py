@@ -4,13 +4,18 @@ from typing import List, Dict
 from datetime import datetime, timedelta
 
 
-def build_system_prompt(registered_servers: List[Dict], collection_schemas: Dict[str, Dict] = None) -> str:
+def build_system_prompt(
+    registered_servers: List[Dict],
+    collection_schemas: Dict[str, Dict] = None,
+    registered_skills: List[Dict] = None
+) -> str:
     """
     Build context-aware system prompt with registered services.
 
     Args:
         registered_servers: List of registered MCP servers
         collection_schemas: Optional dict of collection schemas
+        registered_skills: Optional list of registered skills
 
     Returns:
         Complete system prompt
@@ -39,6 +44,20 @@ def build_system_prompt(registered_servers: List[Dict], collection_schemas: Dict
         for coll_name, coll_info in collection_schemas.items():
             fields = ", ".join([f"{k}:{v}" for k, v in coll_info.get('schema', {}).items()])
             schema_list += f"\n  - {coll_name}: {coll_info.get('description', 'No description')}\n    Fields: {fields}"
+
+    # Format skills
+    skill_list = ""
+    if registered_skills:
+        for skill in registered_skills:
+            tools = ", ".join(skill.get("tool_names", [])) or "none"
+            senses = ", ".join(skill.get("senses", [])) or "none"
+            triggers = ", ".join(skill.get("triggers", [])) or "none"
+            skill_list += (
+                f"\n  - {skill['name']}: {skill.get('description', 'No description')}"
+                f"\n    Tools: {tools}"
+                f"\n    Senses: {senses}"
+                f"\n    Triggers: {triggers}"
+            )
 
     return f"""You are Eva, an AI orchestrator managing distributed microservices.
 
@@ -79,6 +98,8 @@ Vector Services ({len(vector_servers)}):
 {vector_list if vector_list else "  (none registered)"}
 
 KNOWN VECTOR COLLECTIONS:{schema_list if schema_list else "\n  (none registered - use list_collections tool to discover)"}
+
+REGISTERED SKILLS:{skill_list if skill_list else "\n  (none registered)"}
 
 AVAILABLE TOOLS:
 - list_directory(server_id, path, recursive=False): List files in directory

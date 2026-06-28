@@ -56,8 +56,11 @@ class TaskExecutor:
             # Get collection schemas
             collection_schemas = storage.list_collection_schemas()
 
+            # Get registered skills
+            registered_skills = storage.list_skills(enabled_only=True)
+
             # Build system prompt with context
-            system_prompt = build_system_prompt(servers, collection_schemas)
+            system_prompt = build_system_prompt(servers, collection_schemas, registered_skills)
 
             # Initialize conversation
             if not task["conversation"]:

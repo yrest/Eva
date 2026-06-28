@@ -165,6 +165,10 @@ GET    /executions/{id}/logs     # Get execution logs
 GET    /health                   # Health check
 POST   /archive                  # Trigger archival
 GET    /mcp/info                 # MCP server info
+POST   /admin/mcp-servers        # Register MCP server
+GET    /admin/mcp-servers        # List MCP servers
+POST   /admin/skills             # Register skill
+GET    /admin/skills             # List skills
 ```
 
 ## Environment Variables
