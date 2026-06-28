@@ -6,6 +6,7 @@
 
 - **File-based storage** - No PostgreSQL, no Redis, just JSON files
 - **MCP server registry** - Register filesystem, embedding, and vector services
+- **Skills registry** - Register reusable skills that map triggers to tools and senses
 - **Dynamic task orchestration** - LLM-powered, no hard-coded task types
 - **Guardrails** - Validate LLM plans before execution
 - **Few-shot examples** - Teach Eva common patterns
@@ -17,6 +18,7 @@
 services/tasks/
 ├── data/                    # All data lives here
 │   ├── mcp_servers.json    # Registered services
+│   ├── skills.json         # Registered skills
 │   ├── tasks/              # One JSON file per task
 │   ├── approvals/          # Approval requests
 │   └── logs/               # JSONL logs
@@ -100,6 +102,25 @@ uvicorn src.main_simple:app --reload --port 8008
 
 ```bash
 ./eva-register.py list
+```
+
+### Register Skills
+
+Register reusable skills separately from MCP servers so Eva can match user intent to the right tools and senses:
+
+```bash
+./eva-register.py add-skill "index_filesystems" \
+  "Index files from registered filesystems into the vector store" \
+  --tool list_directory \
+  --tool read_file \
+  --tool embed_text \
+  --tool upsert_vectors \
+  --sense filesystem \
+  --sense vector \
+  --trigger index \
+  --trigger filesystems
+
+./eva-register.py list-skills
 ```
 
 ### Register Collection Schemas

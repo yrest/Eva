@@ -28,6 +28,11 @@ class FileStorage:
         if not self.collections_file.exists():
             self.collections_file.write_text(json.dumps({"collections": {}}, indent=2))
 
+        # Ensure skills registry exists
+        self.skills_file = self.base / "skills.json"
+        if not self.skills_file.exists():
+            self.skills_file.write_text(json.dumps({"skills": []}, indent=2))
+
     # ===== MCP Server Registry =====
 
     def list_servers(self, enabled_only: bool = True, server_type: str = None) -> List[Dict]:
@@ -231,6 +236,89 @@ class FileStorage:
             "collection_name": collection_name
         })
 
+        return True
+
+    # ===== Skills Registry =====
+
+    def list_skills(self, enabled_only: bool = True) -> List[Dict]:
+        """Get all registered skills."""
+        data = json.loads(self.skills_file.read_text())
+        skills = data.get("skills", [])
+
+        if enabled_only:
+            skills = [s for s in skills if s.get("enabled", True)]
+
+        return skills
+
+    def get_skill(self, skill_id: str) -> Optional[Dict]:
+        """Get skill by ID."""
+        skills = self.list_skills(enabled_only=False)
+        return next((s for s in skills if s["id"] == skill_id), None)
+
+    def get_skill_by_name(self, name: str) -> Optional[Dict]:
+        """Get skill by name."""
+        skills = self.list_skills(enabled_only=False)
+        return next((s for s in skills if s["name"] == name), None)
+
+    def add_skill(
+        self,
+        name: str,
+        description: str,
+        tool_names: List[str] = None,
+        senses: List[str] = None,
+        triggers: List[str] = None,
+    ) -> Dict:
+        """Register a new skill."""
+        data = json.loads(self.skills_file.read_text())
+
+        if any(s["name"] == name for s in data["skills"]):
+            raise ValueError(f"Skill with name '{name}' already exists")
+
+        skill = {
+            "id": str(uuid.uuid4()),
+            "name": name,
+            "description": description,
+            "tool_names": tool_names or [],
+            "senses": senses or [],
+            "triggers": triggers or [],
+            "enabled": True,
+            "registered_at": datetime.utcnow().isoformat()
+        }
+
+        data["skills"].append(skill)
+        self.skills_file.write_text(json.dumps(data, indent=2))
+
+        self.log_event("system", "skill_registered", {
+            "skill_id": skill["id"],
+            "name": name
+        })
+
+        return skill
+
+    def update_skill(self, skill_id: str, updates: Dict) -> Dict:
+        """Update skill properties."""
+        data = json.loads(self.skills_file.read_text())
+
+        for skill in data["skills"]:
+            if skill["id"] == skill_id:
+                skill.update(updates)
+                self.skills_file.write_text(json.dumps(data, indent=2))
+                return skill
+
+        raise ValueError(f"Skill {skill_id} not found")
+
+    def remove_skill(self, skill_id: str) -> bool:
+        """Remove skill from registry."""
+        data = json.loads(self.skills_file.read_text())
+        original_count = len(data["skills"])
+        data["skills"] = [s for s in data["skills"] if s["id"] != skill_id]
+
+        if len(data["skills"]) == original_count:
+            return False
+
+        self.skills_file.write_text(json.dumps(data, indent=2))
+
+        self.log_event("system", "skill_removed", {"skill_id": skill_id})
         return True
 
     # ===== Task Management =====

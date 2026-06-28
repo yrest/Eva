@@ -187,6 +187,113 @@ def remove_collection(args):
         print(f"\n❌ Collection schema '{args.name}' not found\n")
 
 
+def add_skill(args):
+    """Register a skill."""
+    skill = storage.add_skill(
+        name=args.name,
+        description=args.description,
+        tool_names=args.tool_names or [],
+        senses=args.senses or [],
+        triggers=args.triggers or []
+    )
+
+    print(f"\n✅ Registered skill: {skill['name']}")
+    print(f"   ID:          {skill['id']}")
+    print(f"   Tools:       {', '.join(skill['tool_names']) or 'None'}")
+    print(f"   Senses:      {', '.join(skill['senses']) or 'None'}")
+    print(f"   Triggers:    {', '.join(skill['triggers']) or 'None'}")
+    print()
+
+
+def list_skills(args):
+    """List all registered skills."""
+    skills = storage.list_skills(enabled_only=not args.all)
+
+    if not skills:
+        print("\n📋 No skills registered yet.\n")
+        return
+
+    print(f"\n📋 Registered Skills ({len(skills)}):\n")
+
+    for skill in skills:
+        status = "✅" if skill.get("enabled") else "❌"
+        print(f"  {status} {skill['name']}")
+        print(f"     ID:       {skill['id']}")
+        print(f"     Tools:    {', '.join(skill.get('tool_names', [])) or 'None'}")
+        print(f"     Senses:   {', '.join(skill.get('senses', [])) or 'None'}")
+        print(f"     Triggers: {', '.join(skill.get('triggers', [])) or 'None'}")
+        print()
+
+
+def show_skill(args):
+    """Show detailed skill info."""
+    skill = storage.get_skill(args.skill)
+    if not skill:
+        skill = storage.get_skill_by_name(args.skill)
+
+    if not skill:
+        print(f"\n❌ Skill '{args.skill}' not found\n")
+        sys.exit(1)
+
+    status = "✅ Enabled" if skill.get("enabled") else "❌ Disabled"
+    print(f"\n🧠 {skill['name']} ({status})")
+    print(f"   ID:           {skill['id']}")
+    print(f"   Description:  {skill['description']}")
+    print(f"   Tools:        {', '.join(skill.get('tool_names', [])) or 'None'}")
+    print(f"   Senses:       {', '.join(skill.get('senses', [])) or 'None'}")
+    print(f"   Triggers:     {', '.join(skill.get('triggers', [])) or 'None'}")
+    print(f"   Registered:   {skill['registered_at']}")
+    print()
+
+
+def remove_skill(args):
+    """Remove a skill from registry."""
+    skill = storage.get_skill(args.skill)
+    if not skill:
+        skill = storage.get_skill_by_name(args.skill)
+
+    if not skill:
+        print(f"\n❌ Skill '{args.skill}' not found\n")
+        sys.exit(1)
+
+    if not args.yes:
+        confirm = input(f"Remove skill '{skill['name']}'? [y/N] ")
+        if confirm.lower() != 'y':
+            print("Cancelled.")
+            return
+
+    storage.remove_skill(skill['id'])
+    print(f"\n✅ Removed skill: {skill['name']}\n")
+
+
+def enable_skill(args):
+    """Enable a skill."""
+    skill = storage.get_skill(args.skill)
+    if not skill:
+        skill = storage.get_skill_by_name(args.skill)
+
+    if not skill:
+        print(f"\n❌ Skill '{args.skill}' not found\n")
+        sys.exit(1)
+
+    storage.update_skill(skill['id'], {"enabled": True})
+    print(f"\n✅ Enabled skill: {skill['name']}\n")
+
+
+def disable_skill(args):
+    """Disable a skill."""
+    skill = storage.get_skill(args.skill)
+    if not skill:
+        skill = storage.get_skill_by_name(args.skill)
+
+    if not skill:
+        print(f"\n❌ Skill '{args.skill}' not found\n")
+        sys.exit(1)
+
+    storage.update_skill(skill['id'], {"enabled": False})
+    print(f"\n⏸️  Disabled skill: {skill['name']}\n")
+
+
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -221,6 +328,11 @@ Examples:
 
   # Remove collection schema
   %(prog)s remove-collection abc
+
+  # Register a skill
+  %(prog)s add-skill "index_filesystems" "Index code and documents from registered filesystems" \
+    --tool list_directory --tool read_file --tool embed_text --tool upsert_vectors \
+    --sense filesystem --sense vector --trigger index --trigger filesystems
         """
     )
 
@@ -277,6 +389,40 @@ Examples:
     remove_coll_parser.add_argument('name', help='Collection name')
     remove_coll_parser.add_argument('-y', '--yes', action='store_true', help='Skip confirmation')
     remove_coll_parser.set_defaults(func=remove_collection)
+
+    # Skill commands
+    add_skill_parser = subparsers.add_parser('add-skill', help='Register a skill')
+    add_skill_parser.add_argument('name', help='Skill name')
+    add_skill_parser.add_argument('description', help='Skill description')
+    add_skill_parser.add_argument('--tool', dest='tool_names', action='append',
+                                  help='Tool name used by this skill (repeatable)')
+    add_skill_parser.add_argument('--sense', dest='senses', action='append',
+                                  help='Sense or data source used by this skill (repeatable)')
+    add_skill_parser.add_argument('--trigger', dest='triggers', action='append',
+                                  help='Trigger phrase used to match this skill (repeatable)')
+    add_skill_parser.set_defaults(func=add_skill)
+
+    list_skills_parser = subparsers.add_parser('list-skills', help='List registered skills')
+    list_skills_parser.add_argument('-a', '--all', action='store_true',
+                                    help='Include disabled skills')
+    list_skills_parser.set_defaults(func=list_skills)
+
+    show_skill_parser = subparsers.add_parser('show-skill', help='Show skill details')
+    show_skill_parser.add_argument('skill', help='Skill ID or name')
+    show_skill_parser.set_defaults(func=show_skill)
+
+    remove_skill_parser = subparsers.add_parser('remove-skill', help='Remove a skill')
+    remove_skill_parser.add_argument('skill', help='Skill ID or name')
+    remove_skill_parser.add_argument('-y', '--yes', action='store_true', help='Skip confirmation')
+    remove_skill_parser.set_defaults(func=remove_skill)
+
+    enable_skill_parser = subparsers.add_parser('enable-skill', help='Enable a skill')
+    enable_skill_parser.add_argument('skill', help='Skill ID or name')
+    enable_skill_parser.set_defaults(func=enable_skill)
+
+    disable_skill_parser = subparsers.add_parser('disable-skill', help='Disable a skill')
+    disable_skill_parser.add_argument('skill', help='Skill ID or name')
+    disable_skill_parser.set_defaults(func=disable_skill)
 
     args = parser.parse_args()
 
